@@ -9,3 +9,4 @@ edition = "2018"
 async-tungstenite = {version = "0.10.0", features=["async-std-runtime"]}
 async-std = "1.6.0"
 futures = "0.3.5"
+colored = "2.0.0"

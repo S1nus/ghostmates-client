@@ -25,6 +25,8 @@ use async_tungstenite::WebSocketStream;
 use async_tungstenite::tungstenite::Error as TungsteniteError;
 use async_tungstenite::tungstenite::protocol::Message;
 
+use colored::Colorize;
+
 type WebSocketWrite = SplitSink<WebSocketStream<TcpStream>, Message>;
 type WebSocketRead = SplitStream<WebSocketStream<TcpStream>>;
 
@@ -49,9 +51,9 @@ async fn server_loop(read: WebSocketRead, s: Arc<Mutex<WebSocketWrite>>) /*-> Re
         })
         .try_for_each(|msg| {
             print!("{}\nghxc> ", msg);
-            stdout().flush();
+            stdout().flush().unwrap();
             future::ok(())
-        }).await;
+        }).await.expect("Server loop failed");
 
     println!("Server loop ended.");
 }
@@ -59,9 +61,9 @@ async fn server_loop(read: WebSocketRead, s: Arc<Mutex<WebSocketWrite>>) /*-> Re
 async fn user_loop(s: Arc<Mutex<WebSocketWrite>>) {
     loop {
         let mut input_string = String::new();
-        stdout().flush();
+        stdout().flush().unwrap();
         print!("ghxc> ");
-        stdout().flush();
+        stdout().flush().unwrap();
         stdin().read_line(&mut input_string).expect("Did not enter a correct string");
         if let Some('\n')=input_string.chars().next_back() {
             input_string.pop();
@@ -75,12 +77,21 @@ async fn user_loop(s: Arc<Mutex<WebSocketWrite>>) {
             .unwrap()
             .send(
                 Message::from(input_string.clone())
-            ).await;
+            ).await.expect("Failed to send");
 
     }
 }
 
 fn main() {
+    println!("
+╭━━━┳╮╱╱╱╱╱╱╱╭╮╱╱╱╱╱╱╭╮
+┃╭━╮┃┃╱╱╱╱╱╱╭╯╰╮╱╱╱╱╭╯╰╮
+┃┃╱╰┫╰━┳━━┳━┻╮╭╋╮╭┳━┻╮╭╋━━┳━━╮
+┃┃╭━┫╭╮┃╭╮┃━━┫┃┃╰╯┃╭╮┃┃┃┃━┫━━┫
+┃╰┻━┃┃┃┃╰╯┣━━┃╰┫┃┃┃╭╮┃╰┫┃━╋━━┃
+╰━━━┻╯╰┻━━┻━━┻━┻┻┻┻╯╰┻━┻━━┻━━╯
+    ");
+    println!("{} You are currently trusting a centralized server for anonymity!", "Warning!".red().bold());
     let server_connection = task::block_on(connect_to_server());
     let (server_write, server_read) = server_connection.split();
     let arc_server_write = Arc::new(Mutex::new(server_write));
