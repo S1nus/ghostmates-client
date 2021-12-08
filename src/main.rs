@@ -188,6 +188,18 @@ async fn user_loop(s: Arc<Mutex<WebSocketWrite>>, peer_store: Arc<HashMap<String
                         )
                 );
             },
+            "toggle" => {
+                match split_string[1] {
+                    "neighbor" => {
+                    },
+                    "courier" => {
+
+                    },
+                    "recipient" => {
+
+                    },
+                }
+            },
             _ => {
 
             }
