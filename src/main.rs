@@ -40,6 +40,8 @@ use serde::{Serialize, Deserialize};
 
 use flurry::HashMap;
 
+mod client;
+
 type WebSocketWrite = SplitSink<WebSocketStream<TcpStream>, Message>;
 type WebSocketRead = SplitStream<WebSocketStream<TcpStream>>;
 
@@ -188,7 +190,7 @@ async fn user_loop(s: Arc<Mutex<WebSocketWrite>>, peer_store: Arc<HashMap<String
                         )
                 );
             },
-            "toggle" => {
+            /*"toggle" => {
                 match split_string[1] {
                     "neighbor" => {
                     },
@@ -199,7 +201,7 @@ async fn user_loop(s: Arc<Mutex<WebSocketWrite>>, peer_store: Arc<HashMap<String
 
                     },
                 }
-            },
+            },*/
             _ => {
 
             }
