@@ -1,0 +1,22 @@
+SenderPCheckTable:
+(courier, recipient) | SenderPCheckProtoData { ... }
+CourierPCheckTable
+(sender, recipient) | CourierPCheckProtoData { ... }
+RecipientPCheckTable
+(sender, courier) | RecipientPCheckProtoData { ... }
+
+SenderPCheckProtoData {
+  courier_encrypted_pairs: [PaillierCyphertext; 128]
+  recipient_encrypted_pairs: [PaillierCyphertext; 128]
+
+  courier_A_shares: [ShamirShare; 128]
+  courier_B_shares: [ShamirShare; 128]
+
+  recipient_A_shares: [ShamirShare; 128]
+  recipient_B_shares: [ShamirShare; 128]
+
+  courier_to_recipient_X2_shares: [ShamirShare; 64]
+  courier_to_recipient_Y2_shares: [ShamirShare; 64]
+  courier_to_recipient_X_shares: [ShamirShare; 64]
+  courier_to_recipient_Y_shares: [ShamirShare; 64]
+}
