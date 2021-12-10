@@ -34,6 +34,8 @@ pub struct ACheckProtoData {}
 pub struct Client {
     pk: SodiumPublicKey,
     sk: SodiumSecretKey,
+    ghost_address: String,
+
     server_write: Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
 
     peer_store: Arc<HashMap<String, SodiumPublicKey>>,
@@ -65,6 +67,8 @@ pub fn new_client(pk: SodiumPublicKey,
         outgoing_encrypts: Arc::new(HashMap::new()),
         incoming_decrypts: Arc::new(HashMap::new()),
         peer_store: Arc::new(HashMap::new()),
+
+        ghost_address: address_from_sodium_pk(&pk),
 
         accepting_achecks: true,
         pcheck_courier: true,
@@ -207,10 +211,23 @@ impl Client {
         let intro = ProtocolMessage::PCheck(
             PCheckMessage::RequestForPCheck {
                 recipient_ghost_address: recipient_address.clone(),
+                courier_ghost_address: courier_address.clone(),
             }
         );
-        if let Some(dm) = self.direct_message(self.sk.clone(), recipient_address.clone(), intro, self.peer_store.clone()) {
-            let serialized_dm = bincode::serialize(&dm)
+        if let Some(recipient_dm) = self.direct_message(self.sk.clone(), recipient_address.clone(), intro.clone(), self.peer_store.clone()) {
+            let serialized_dm = bincode::serialize(&recipient_dm)
+                .expect("Couldn't serialize dm");
+            task::block_on(
+                self.server_write
+                .lock()
+                .unwrap()
+                .send(
+                    Message::Binary(serialized_dm)
+                )
+            );
+        }
+        if let Some(courier_dm) = self.direct_message(self.sk.clone(), courier_address.clone(), intro.clone(), self.peer_store.clone()) {
+            let serialized_dm = bincode::serialize(&courier_dm)
                 .expect("Couldn't serialize dm");
             task::block_on(
                 self.server_write
@@ -293,6 +310,43 @@ impl Client {
 
     pub fn route_incoming(&self, from_address: String, message: ProtocolMessage) {
         println!("{} {:?} from {}", "received".bold(), message, from_address.blue());
+        match message {
+            ProtocolMessage::PCheck(pcm) => {
+                match pcm {
+                    PCheckMessage::RequestForPCheck {
+                        recipient_ghost_address,
+                        courier_ghost_address
+                    } => {
+                        if recipient_ghost_address == courier_ghost_address {
+                            print!("they're the same. Invalid.\nghxc> ");
+                            return
+                        }
+                        if recipient_ghost_address == self.ghost_address {
+                            print!("I'm recipient.\nghxc> ");
+                            self.recipient_pcheck_table.insert(
+                                (from_address.clone(), recipient_ghost_address.clone()),
+                                RecipientPCheckProtoData{},
+                                &self.recipient_pcheck_table.guard()
+                            );
+                        }
+                        else if courier_ghost_address == self.ghost_address {
+                            print!("I'm courier.\nghxc> ");
+                            self.courier_pcheck_table.insert(
+                                (from_address.clone(), recipient_ghost_address.clone()),
+                                CourierPCheckProtoData{},
+                                &self.courier_pcheck_table.guard()
+                            );
+                        }
+                    },
+                    _ => {
+                        print!("No implementation for this message type yet.\nghxc> ");
+                    }
+                }
+            },
+            _ => {
+                print!("No implementation for this message type yet.\nghxc> ");
+            }
+        }
     }
 
 }
