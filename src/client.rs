@@ -25,9 +25,65 @@ use sha2::{Sha256, Digest,
 use ripemd160::{Ripemd160};
 use bincode;
 
-pub struct SenderPCheckProtoData {}
-pub struct CourierPCheckProtoData {}
-pub struct RecipientPCheckProtoData {}
+use paillier::*;
+use paillier::{
+    EncryptionKey as PaillierEncryptionKey,
+    DecryptionKey as PaillierDecryptionKey,
+    encoding::EncodedCiphertext as PaillierEncodedCiphertext
+};
+use rand::{distributions::Uniform, Rng, rngs::ThreadRng};
+
+pub struct SenderPCheckProtoData {
+    sender_a_values: Vec<u64>,
+    sender_b_values: Vec<u64>,
+    recipient_paillier_key: Option<PaillierEncryptionKey>,
+    recipient_to_sender_a_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    recipient_to_sender_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    recipient_to_sender_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
+
+    courier_paillier_key: Option<PaillierEncryptionKey>,
+    courier_to_sender_a_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    courier_to_sender_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    courier_to_sender_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
+}
+
+impl SenderPCheckProtoData {
+    pub fn new_with_ab_values() -> SenderPCheckProtoData {
+
+        let mut rng = rand::thread_rng();
+        let range = Uniform::new(0, 7757);
+
+        let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
+        let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
+
+        SenderPCheckProtoData {
+            sender_a_values: a_vals,
+            sender_b_values: b_vals,
+            recipient_paillier_key: None,
+            recipient_to_sender_a_shares: None,
+            recipient_to_sender_b_shares: None,
+            recipient_to_sender_encrypted_a_b_pairs: None,
+
+            courier_paillier_key: None,
+            courier_to_sender_a_shares: None,
+            courier_to_sender_b_shares: None,
+            courier_to_sender_encrypted_a_b_pairs: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CourierPCheckProtoData {
+    a_values: Option<Vec<u64>>,
+    b_values: Option<Vec<u64>>,
+    encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>
+}
+#[derive(Clone)]
+pub struct RecipientPCheckProtoData {
+    a_values: Option<Vec<u64>>,
+    b_values: Option<Vec<u64>>,
+    encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>
+}
 pub struct ACheckProtoData {}
 
 #[derive(Clone)]
@@ -36,12 +92,15 @@ pub struct Client {
     sk: SodiumSecretKey,
     ghost_address: String,
 
+    paillier_pubkey: PaillierEncryptionKey,
+    paillier_privkey: PaillierDecryptionKey,
+
     server_write: Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
 
     peer_store: Arc<HashMap<String, SodiumPublicKey>>,
-    sender_pcheck_table: Arc<HashMap<(String, String), SenderPCheckProtoData>>,
-    courier_pcheck_table: Arc<HashMap<(String, String), CourierPCheckProtoData>>,
-    recipient_pcheck_table: Arc<HashMap<(String, String), RecipientPCheckProtoData>>,
+    sender_pcheck_table: Arc<HashMap<(String, String), Arc<Mutex<SenderPCheckProtoData>>>>,
+    courier_pcheck_table: Arc<HashMap<(String, String), Arc<Mutex<CourierPCheckProtoData>>>>,
+    recipient_pcheck_table: Arc<HashMap<(String, String), Arc<Mutex<RecipientPCheckProtoData>>>>,
 
     outgoing_encrypts: Arc<HashMap<String, Arc<Mutex<Vec<ProtocolMessage>>>>>,
     incoming_decrypts: Arc<HashMap<String, Arc<Mutex<Vec<(SodiumNonce, Vec<u8>)>>>>>,
@@ -56,10 +115,13 @@ pub fn new_client(pk: SodiumPublicKey,
     sk: SodiumSecretKey, 
     server_write: Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>,
 ) -> Client {
+    let (ppk, psk) = Paillier::keypair().keys();
     Client {
         pk: pk,
         sk: sk,
         server_write: server_write,
+        paillier_pubkey: ppk,
+        paillier_privkey: psk,
 
         sender_pcheck_table: Arc::new(HashMap::new()),
         courier_pcheck_table: Arc::new(HashMap::new()),
@@ -208,6 +270,11 @@ impl Client {
             print!("{}\n", "invalid recipient address".red());
             return
         }
+        self.sender_pcheck_table.insert(
+            (courier_address.clone(), recipient_address.clone()),
+            Arc::new(Mutex::new(SenderPCheckProtoData::new_with_ab_values())),
+            &self.sender_pcheck_table.guard()
+        );
         let intro = ProtocolMessage::PCheck(
             PCheckMessage::RequestForPCheck {
                 recipient_ghost_address: recipient_address.clone(),
@@ -309,7 +376,7 @@ impl Client {
     }
 
     pub fn route_incoming(&self, from_address: String, message: ProtocolMessage) {
-        println!("{} {:?} from {}", "received".bold(), message, from_address.blue());
+        println!("{} from {}", "received".bold(), from_address.blue());
         match message {
             ProtocolMessage::PCheck(pcm) => {
                 match pcm {
@@ -323,20 +390,126 @@ impl Client {
                         }
                         if recipient_ghost_address == self.ghost_address {
                             print!("I'm recipient.\nghxc> ");
+                            println!("generating pcheck round1 data...");
+                            let recipient_pcheck_data = Arc::new(Mutex::new(self.generate_recipient_pcheck_data()));
+                            println!("finished generating.");
                             self.recipient_pcheck_table.insert(
                                 (from_address.clone(), recipient_ghost_address.clone()),
-                                RecipientPCheckProtoData{},
+                                recipient_pcheck_data.clone(),
                                 &self.recipient_pcheck_table.guard()
                             );
+                            if let Some(dm) = self.direct_message(
+                                self.sk.clone(), 
+                                from_address.clone(),
+                                ProtocolMessage::PCheck(
+                                    PCheckMessage::RecipientToSenderRound1 {
+                                        courier_address: courier_ghost_address,
+                                        paillier_key: self.paillier_pubkey.clone(),
+                                        enc_ab_pairs: recipient_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
+                                        a_shares: vec![],
+                                        b_shares: vec![],
+                                    }
+                                ),
+                                self.peer_store.clone(),
+                            ) {
+                                let serialized_dm = bincode::serialize(&dm)
+                                    .expect("Couldn't serialize dm");
+                                task::block_on(
+                                    self.server_write
+                                    .lock()
+                                    .unwrap()
+                                    .send(
+                                        Message::Binary(serialized_dm)
+                                    )
+                                );
+                            };
                         }
                         else if courier_ghost_address == self.ghost_address {
                             print!("I'm courier.\nghxc> ");
+                            println!("generating pcheck round1 data...");
+                            let courier_pcheck_data = Arc::new(Mutex::new(self.generate_courier_pcheck_data()));
+                            println!("finished generating.");
                             self.courier_pcheck_table.insert(
                                 (from_address.clone(), recipient_ghost_address.clone()),
-                                CourierPCheckProtoData{},
+                                courier_pcheck_data.clone(),
                                 &self.courier_pcheck_table.guard()
                             );
+                            if let Some(dm) = self.direct_message(
+                                self.sk.clone(), 
+                                from_address.clone(),
+                                ProtocolMessage::PCheck(
+                                    PCheckMessage::CourierToSenderRound1 {
+                                        recipient_address: recipient_ghost_address,
+                                        paillier_key: self.paillier_pubkey.clone(),
+                                        enc_ab_pairs: courier_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
+                                        a_shares: vec![],
+                                        b_shares: vec![],
+                                    }
+                                ),
+                                self.peer_store.clone(),
+                            ) {
+                                let serialized_dm = bincode::serialize(&dm)
+                                    .expect("Couldn't serialize dm");
+                                task::block_on(
+                                    self.server_write
+                                    .lock()
+                                    .unwrap()
+                                    .send(
+                                        Message::Binary(serialized_dm)
+                                    )
+                                );
+                            };
+
                         }
+                    },
+                    PCheckMessage::RecipientToSenderRound1 {
+                        courier_address,
+                        paillier_key,
+                        enc_ab_pairs,
+                        a_shares,
+                        b_shares,
+                    }=> {
+                        println!("received a round1 from a recipient courier: {}", courier_address); 
+                        if let Some(proto_data) = self.sender_pcheck_table
+                            .get(
+                                &(courier_address.clone(), from_address.clone()),
+                                &self.sender_pcheck_table.guard()
+                             )
+                        { 
+                            if let Ok(mut pd) = proto_data.lock() {
+                                pd.recipient_paillier_key = Some(paillier_key);
+                                pd.recipient_to_sender_a_shares = Some(a_shares);
+                                pd.recipient_to_sender_b_shares = Some(b_shares);
+                                pd.recipient_to_sender_encrypted_a_b_pairs = Some(enc_ab_pairs);
+                            }
+
+                        }
+                        self.sender_process_round1(courier_address.clone(), from_address.clone());
+                    },
+                    PCheckMessage::CourierToSenderRound1 {
+                        recipient_address,
+                        paillier_key,
+                        enc_ab_pairs,
+                        a_shares,
+                        b_shares,
+                    } => {
+                        println!("received a round1 from a courier"); 
+                        println!("received a round1 from a courier recipient: {}", recipient_address); 
+                        if let Some(proto_data) = self.sender_pcheck_table
+                            .get(
+                                &(from_address.clone(), recipient_address.clone()),
+                                &self.sender_pcheck_table.guard()
+                             )
+                        { 
+                            if let Ok(mut pd) = proto_data.lock() {
+                                pd.courier_paillier_key = Some(paillier_key);
+                                pd.courier_to_sender_a_shares = Some(a_shares);
+                                pd.courier_to_sender_b_shares = Some(b_shares);
+                                pd.courier_to_sender_encrypted_a_b_pairs = Some(enc_ab_pairs);
+                            }
+
+                        }
+                        self.sender_process_round1(from_address.clone(), recipient_address.clone());
                     },
                     _ => {
                         print!("No implementation for this message type yet.\nghxc> ");
@@ -347,6 +520,86 @@ impl Client {
                 print!("No implementation for this message type yet.\nghxc> ");
             }
         }
+    }
+
+    fn generate_courier_pcheck_data(&self) -> CourierPCheckProtoData {
+        let mut rng = rand::thread_rng();
+        let range = Uniform::new(0, 7757);
+
+        let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
+        let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
+        let pairs: Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)> =  
+            a_vals.iter().zip(b_vals.iter()).map(|(a, b)| 
+        {
+            (
+                Paillier::encrypt(&self.paillier_privkey, *a),
+                Paillier::encrypt(&self.paillier_privkey, *b)
+            )
+        }).collect();
+        CourierPCheckProtoData {
+            a_values: Some(a_vals),
+            b_values: Some(b_vals),
+            encrypted_a_b_pairs: Some(pairs),
+        }
+    }
+
+    fn generate_recipient_pcheck_data(&self) -> RecipientPCheckProtoData {
+        let mut rng = rand::thread_rng();
+        let range = Uniform::new(0, 7757);
+
+        let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
+        let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
+        let pairs: Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)> =  
+            a_vals.iter().zip(b_vals.iter()).map(|(a, b)| 
+        {
+            (
+                Paillier::encrypt(&self.paillier_privkey, *a),
+                Paillier::encrypt(&self.paillier_privkey, *b)
+            )
+        }).collect();
+        RecipientPCheckProtoData {
+            a_values: Some(a_vals),
+            b_values: Some(b_vals),
+            encrypted_a_b_pairs: Some(pairs),
+        }
+    }
+
+    fn sender_process_round1(&self, courier_address: String, recipient_address: String,) {
+        if let Some(proto_data) = self.sender_pcheck_table
+        .get(
+            &(courier_address.clone(), recipient_address.clone()),
+            &self.sender_pcheck_table.guard()
+        ) {
+            if let Ok(pd) = proto_data.lock() {
+                if (
+                    pd.recipient_paillier_key.is_some() &&
+                    pd.recipient_to_sender_a_shares.is_some() &&
+                    pd.recipient_to_sender_b_shares.is_some() &&
+                    pd.recipient_to_sender_encrypted_a_b_pairs.is_some() &&
+
+                    pd.courier_paillier_key.is_some() &&
+                    pd.courier_to_sender_a_shares.is_some() &&
+                    pd.courier_to_sender_b_shares.is_some() &&
+                    pd.courier_to_sender_encrypted_a_b_pairs.is_some()
+                ) {
+                    print!("{}\nghxc> ", "WE ARE REDY FOR ROUND 2".green().bold());
+                    self.sender_generate_RTs(&pd);
+                }
+                else {
+                    print!("{}\nghxc> ", "We don't have it all yet".yellow());
+                }
+            }
+            else {
+                print!("{}\nghxc> ", "Major problem".red().bold());
+            }
+        }
+        else {
+            print!("{}\nghxc> ", "Major Problem!".red().bold());
+        }
+    }
+
+    fn sender_generate_RTs(&self, pd: &SenderPCheckProtoData) {
+        // duhhh
     }
 
 }

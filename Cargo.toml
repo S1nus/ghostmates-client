@@ -19,3 +19,4 @@ serde = { version = "1.0", features = ["derive"] }
 flurry = "0.3.1"
 ghostmates-common = { path = "../ghostmates-common" }
 paillier = { version = "0.2.0" }
+rand = "0.8.4"
