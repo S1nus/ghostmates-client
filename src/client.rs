@@ -175,19 +175,7 @@ impl Client {
                         &self.outgoing_encrypts.guard()
                     ) {
                         to_encrypt.lock().unwrap().iter().for_each(|pm| {
-                            if let Some(dm) = self.direct_message(self.sk.clone(), ghostmates_address.clone(), pm.clone(), self.peer_store.clone()) {
-                                let serialized_dm = bincode::serialize(&dm)
-                                    .expect("Couldn't serialize dm");
-                                task::block_on(
-                                    self.server_write
-                                    .lock()
-                                    .unwrap()
-                                    .send(
-                                        Message::Binary(serialized_dm)
-                                    )
-                                );
-                            }
-                            else {
+                            if !self.direct_message(ghostmates_address.clone(), pm.clone()) {
                                 print!("Major problem dude.\nghxc> ");
                             }
                         });
@@ -290,30 +278,14 @@ impl Client {
                 courier_ghost_address: courier_address.clone(),
             }
         );
-        if let Some(recipient_dm) = self.direct_message(self.sk.clone(), recipient_address.clone(), intro.clone(), self.peer_store.clone()) {
-            let serialized_dm = bincode::serialize(&recipient_dm)
-                .expect("Couldn't serialize dm");
-            task::block_on(
-                self.server_write
-                .lock()
-                .unwrap()
-                .send(
-                    Message::Binary(serialized_dm)
-                )
-            );
+        if !self.direct_message(recipient_address.clone(), intro.clone()) {
+            print!("{}", "weird that direct messaging would fail at this point.".yellow());
         }
-        if let Some(courier_dm) = self.direct_message(self.sk.clone(), courier_address.clone(), intro.clone(), self.peer_store.clone()) {
-            let serialized_dm = bincode::serialize(&courier_dm)
-                .expect("Couldn't serialize dm");
-            task::block_on(
-                self.server_write
-                .lock()
-                .unwrap()
-                .send(
-                    Message::Binary(serialized_dm)
-                )
-            );
+
+        if !self.direct_message(courier_address.clone(), intro.clone()) {
+            print!("{}", "weird that direct messaging would fail at this point.".yellow());
         }
+
     }
 
     pub fn lookup(&self, lookup_address: String) {
@@ -350,18 +322,30 @@ impl Client {
         }
     }
 
-    pub fn direct_message(&self, sk: SodiumSecretKey, ghost_address: String, protocol_message: ProtocolMessage, peer_store: Arc<HashMap<String, SodiumPublicKey>>) -> Option<GhostmatesMessage> {
+    // returns true if the message was sent, or false if it had to do a lookup
+    pub fn direct_message(&self, ghost_address: String, protocol_message: ProtocolMessage) -> bool {
         //let pubkey = *peer_store.get(&ghost_address, &peer_store.guard()).unwrap();
-        if let Some(pubkey) = peer_store.get(&ghost_address, &peer_store.guard()) {
+        if let Some(pubkey) = self.peer_store.get(&ghost_address, &self.peer_store.guard()) {
             let nonce = box_::gen_nonce();
             let serialized_message = bincode::serialize(&protocol_message)
                 .expect("Could not serialize protocol message");
-            let cyphertext = box_::seal(&serialized_message, &nonce, &pubkey, &sk);
-            Some(GhostmatesMessage::DirectMessage{
+            let cyphertext = box_::seal(&serialized_message, &nonce, &pubkey, &self.sk);
+            let m = GhostmatesMessage::DirectMessage{
                 dest_address: ghost_address,
                 encrypted_message: cyphertext,
                 nonce: nonce,
-            })
+            };
+            let serialized_dm = bincode::serialize(&m)
+                .expect("Couldn't serialize dm");
+            task::block_on(
+                self.server_write
+                .lock()
+                .unwrap()
+                .send(
+                    Message::Binary(serialized_dm)
+                )
+            );
+            true
         }
         else {
             if let Some(encrypt_vector) = self.outgoing_encrypts.get(
@@ -380,7 +364,7 @@ impl Client {
                 );
             }
             self.lookup(ghost_address);
-            None
+            false
         }
     }
 
@@ -407,8 +391,7 @@ impl Client {
                                 recipient_pcheck_data.clone(),
                                 &self.recipient_pcheck_table.guard()
                             );
-                            if let Some(dm) = self.direct_message(
-                                self.sk.clone(), 
+                            if !self.direct_message(
                                 from_address.clone(),
                                 ProtocolMessage::PCheck(
                                     PCheckMessage::RecipientToSenderRound1 {
@@ -419,19 +402,9 @@ impl Client {
                                         b_shares: vec![],
                                     }
                                 ),
-                                self.peer_store.clone(),
                             ) {
-                                let serialized_dm = bincode::serialize(&dm)
-                                    .expect("Couldn't serialize dm");
-                                task::block_on(
-                                    self.server_write
-                                    .lock()
-                                    .unwrap()
-                                    .send(
-                                        Message::Binary(serialized_dm)
-                                    )
-                                );
-                            };
+                                print!("{}\nghxc> ", "had to to a lookup but it should be fine.".yellow());
+                            }
                         }
                         else if courier_ghost_address == self.ghost_address {
                             print!("I'm courier.\nghxc> ");
@@ -443,8 +416,7 @@ impl Client {
                                 courier_pcheck_data.clone(),
                                 &self.courier_pcheck_table.guard()
                             );
-                            if let Some(dm) = self.direct_message(
-                                self.sk.clone(), 
+                            if !self.direct_message(
                                 from_address.clone(),
                                 ProtocolMessage::PCheck(
                                     PCheckMessage::CourierToSenderRound1 {
@@ -455,19 +427,9 @@ impl Client {
                                         b_shares: vec![],
                                     }
                                 ),
-                                self.peer_store.clone(),
                             ) {
-                                let serialized_dm = bincode::serialize(&dm)
-                                    .expect("Couldn't serialize dm");
-                                task::block_on(
-                                    self.server_write
-                                    .lock()
-                                    .unwrap()
-                                    .send(
-                                        Message::Binary(serialized_dm)
-                                    )
-                                );
-                            };
+                                print!("{}\nghxc> ", "had to do a lookup but should be fine".yellow());
+                            }
 
                         }
                     },
@@ -653,6 +615,21 @@ impl Client {
                         spd.r_values_from_recipient.clone().unwrap()[i]
                     )
                 }).collect());
+
+            let to_courier_r1 = PCheckMessage::SenderToCourierRound1 {
+                    sender_to_courier_t_values: spd.t_values_for_courier.unwrap(),
+            };
+
+            let to_recipient_r1 = PCheckMessage::SenderToRecipientRound1 {
+                sender_to_recipient_t_values: spd.t_values_for_recipient.unwrap(),
+            };
+
+            if !self.direct_message(courier_address, to_courier_r1) {
+                print!("{}\nghxc> ", "not in lookup. weird.".yellow());
+            }
+            if !self.direct_message(recipient_address, to_recipient_r1) {
+                print!("{}\nghxc> ", "not in lookup. weird.".yellow());
+            }
 
             println!("{}", "Done generating R and T values.".green().bold());
         }
