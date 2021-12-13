@@ -34,6 +34,10 @@ use paillier::{
 use rand::{distributions::Uniform, Rng, rngs::ThreadRng};
 
 pub struct SenderPCheckProtoData {
+    r_values_from_courier: Option<Vec<u64>>,
+    r_values_from_recipient: Option<Vec<u64>>,
+    t_values_for_courier: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    t_values_for_recipient: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     sender_a_values: Vec<u64>,
     sender_b_values: Vec<u64>,
     recipient_paillier_key: Option<PaillierEncryptionKey>,
@@ -51,12 +55,17 @@ impl SenderPCheckProtoData {
     pub fn new_with_ab_values() -> SenderPCheckProtoData {
 
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 7757);
+        let range = Uniform::new(0, 4987);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
 
         SenderPCheckProtoData {
+            r_values_from_courier: None,
+            r_values_from_recipient: None,
+            t_values_for_courier: None,
+            t_values_for_recipient: None,
+
             sender_a_values: a_vals,
             sender_b_values: b_vals,
             recipient_paillier_key: None,
@@ -524,7 +533,7 @@ impl Client {
 
     fn generate_courier_pcheck_data(&self) -> CourierPCheckProtoData {
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 7757);
+        let range = Uniform::new(0, 4987);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -545,7 +554,8 @@ impl Client {
 
     fn generate_recipient_pcheck_data(&self) -> RecipientPCheckProtoData {
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 7757);
+        //4987
+        let range = Uniform::new(0, 4987);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -583,23 +593,73 @@ impl Client {
                     pd.courier_to_sender_encrypted_a_b_pairs.is_some()
                 ) {
                     print!("{}\nghxc> ", "WE ARE REDY FOR ROUND 2".green().bold());
-                    self.sender_generate_RTs(&pd);
                 }
                 else {
                     print!("{}\nghxc> ", "We don't have it all yet".yellow());
+                    return;
                 }
             }
             else {
                 print!("{}\nghxc> ", "Major problem".red().bold());
+                return;
             }
+            self.sender_generate_RTs(proto_data.clone());
         }
         else {
             print!("{}\nghxc> ", "Major Problem!".red().bold());
         }
     }
 
-    fn sender_generate_RTs(&self, pd: &SenderPCheckProtoData) {
-        // duhhh
+    fn sender_generate_RTs(&self, pd: Arc<Mutex<SenderPCheckProtoData>>) {
+        if let Ok(mut spd) = pd.lock() {
+            println!("{}", "Starting homomorphic encryptions...".yellow());
+            let courier_key = spd.courier_paillier_key.clone();
+            let recipient_key = spd.recipient_paillier_key.clone();
+
+            let mut rng = rand::thread_rng();
+            let range = Uniform::new::<u64, u64>(0, 4987);
+
+            spd.r_values_from_courier = Some((0..128).map(|_| rng.sample(&range)).collect());
+            spd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
+
+            spd.t_values_for_courier = Some(spd.courier_to_sender_encrypted_a_b_pairs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, cts)| {
+                    let ck = courier_key.clone().unwrap();
+                    Paillier::add(&ck,
+                        Paillier::add(&ck,
+                            Paillier::mul(&ck, cts.clone().0, spd.sender_a_values[i]),
+                            Paillier::mul(&ck, cts.clone().1, spd.sender_b_values[i]),
+                        ),
+                        spd.r_values_from_courier.clone().unwrap()[i]
+                    )
+                }).collect());
+
+            spd.t_values_for_recipient = Some(spd.recipient_to_sender_encrypted_a_b_pairs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, cts)| {
+                    let rk = recipient_key.clone().unwrap();
+                    Paillier::add(&rk,
+                        Paillier::add(&rk,
+                            Paillier::mul(&rk, cts.clone().0, spd.sender_a_values[i]),
+                            Paillier::mul(&rk, cts.clone().1, spd.sender_b_values[i]),
+                        ),
+                        spd.r_values_from_recipient.clone().unwrap()[i]
+                    )
+                }).collect());
+
+            println!("{}", "Done generating R and T values.".green().bold());
+        }
+        else {
+            println!("NOT OK");
+            print!("{}", "Major problem.".red().bold());
+        }
     }
 
 }
