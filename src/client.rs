@@ -655,6 +655,12 @@ impl Client {
                 }).collect());
 
             println!("{}", "Done generating R and T values.".green().bold());
+            let to_courier_r1 = PCheckMessage::SenderToCourierRound1 {
+                sender_to_courier_t_values : spd.t_values_for_courier.clone().unwrap()
+            };
+            let to_recipient_r1 = PCheckMessage::SenderToRecipientRound1 {
+                sender_to_recipient_t_values : spd.t_values_for_recipient.clone().unwrap()
+            };
         }
         else {
             println!("NOT OK");
