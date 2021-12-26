@@ -85,13 +85,24 @@ impl SenderPCheckProtoData {
 pub struct CourierPCheckProtoData {
     a_values: Option<Vec<u64>>,
     b_values: Option<Vec<u64>>,
-    encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>
+    encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
+    t_values_from_sender: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    courier_w_additive_shares: Option<Vec<u64>>,
+    sender_w_additive_shares: Option<Vec<u64>>,
+    recipient_w_additive_shares: Option<Vec<u64>>,
+
+    recipient_paillier_key: Option<PaillierEncryptionKey>,
+    recipient_to_courier_a_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    recipient_to_courier_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    recipient_to_courier_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
 }
 #[derive(Clone)]
 pub struct RecipientPCheckProtoData {
+
     a_values: Option<Vec<u64>>,
     b_values: Option<Vec<u64>>,
-    encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>
+    encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
+    t_values_from_sender: Option<Vec<PaillierEncodedCiphertext<u64>>>,
 }
 pub struct ACheckProtoData {}
 
@@ -420,7 +431,7 @@ impl Client {
                                 from_address.clone(),
                                 ProtocolMessage::PCheck(
                                     PCheckMessage::CourierToSenderRound1 {
-                                        recipient_address: recipient_ghost_address,
+                                        recipient_address: recipient_ghost_address.clone(),
                                         paillier_key: self.paillier_pubkey.clone(),
                                         enc_ab_pairs: courier_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
                                         a_shares: vec![],
@@ -430,8 +441,58 @@ impl Client {
                             ) {
                                 print!("{}\nghxc> ", "had to do a lookup but should be fine".yellow());
                             }
-
+                            
+                            if !self.direct_message(
+                                recipient_ghost_address.clone(),
+                                ProtocolMessage::PCheck(
+                                    PCheckMessage::CourierRequestRecipient {
+                                        sender_ghost_address: from_address.clone(),
+                                    }
+                                ),
+                            ) {
+                                print!("{}\nghxc> ", "had to do a lookup for CourierRequestRecipient but should be fine".yellow());
+                            }
                         }
+                    },
+                    PCheckMessage::CourierRequestRecipient {
+                        sender_ghost_address
+                    } => {
+                        print!("{}{}\nghxc> ", "A courier wants me to receive a package from".yellow(), sender_ghost_address.blue());
+                        let mut pd = match self.recipient_pcheck_table
+                        .get(
+                                &(sender_ghost_address.clone(), from_address.clone()),
+                                &self.sender_pcheck_table.guard()
+                         ) {
+                            Some(proto_data) => {
+                                proto_data.clone()
+                            },
+                            None => {
+                                print!("{}\nghxc> ", "We don't have it, but I'll create it.".yellow());
+                                let recipient_pcheck_data = Arc::new(Mutex::new(self.generate_recipient_pcheck_data()));
+                                self.recipient_pcheck_table.insert(
+                                    (sender_ghost_address.clone(), from_address.clone()),
+                                    recipient_pcheck_data.clone(),
+                                    &self.recipient_pcheck_table.guard()
+                                );
+                                recipient_pcheck_data
+                            }
+                        };
+
+                        if !self.direct_message(
+                            from_address.clone(),
+                            ProtocolMessage::PCheck(
+                                PCheckMessage::RecipientToCourierRound1 {
+                                    sender_address: sender_ghost_address,
+                                    paillier_key: self.paillier_pubkey.clone(),
+                                    enc_ab_pairs: pd.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
+                                    a_shares: vec![],
+                                    b_shares: vec![],
+                                }
+                            ),
+                        ) {
+                            print!("{}\nghxc> ", "had to to a lookup but it should be fine.".yellow());
+                        }
+
                     },
                     PCheckMessage::RecipientToSenderRound1 {
                         courier_address,
@@ -439,7 +500,7 @@ impl Client {
                         enc_ab_pairs,
                         a_shares,
                         b_shares,
-                    }=> {
+                    } => {
                         println!("received a round1 from a recipient courier: {}", courier_address); 
                         if let Some(proto_data) = self.sender_pcheck_table
                             .get(
@@ -456,6 +517,31 @@ impl Client {
 
                         }
                         self.sender_process_round1(courier_address.clone(), from_address.clone());
+                    },
+                    PCheckMessage::RecipientToCourierRound1 {
+                        sender_address,
+                        paillier_key,
+                        enc_ab_pairs,
+                        a_shares,
+                        b_shares,
+                    } => {
+                        println!("received a round1 from a recipient. I'm courier. sender: {}", sender_address); 
+                        if let Some(proto_data) = self.courier_pcheck_table
+                            .get(
+                                &(sender_address.clone(), from_address.clone()),
+                                &self.courier_pcheck_table.guard()
+                             )
+                        {
+
+                            if let Ok(mut pd) = proto_data.lock() {
+                                pd.recipient_paillier_key = Some(paillier_key);
+                                pd.recipient_to_courier_a_shares = Some(a_shares);
+                                pd.recipient_to_courier_b_shares = Some(b_shares);
+                                pd.recipient_to_courier_encrypted_a_b_pairs = Some(enc_ab_pairs);
+                            }
+
+                        }
+                        self.courier_process_round1(sender_address.clone(), from_address.clone());
                     },
                     PCheckMessage::CourierToSenderRound1 {
                         recipient_address,
@@ -481,6 +567,43 @@ impl Client {
 
                         }
                         self.sender_process_round1(from_address.clone(), recipient_address.clone());
+                    },
+                    PCheckMessage::SenderToCourierRound1 {
+                        recipient_address,
+                        sender_to_courier_t_values
+                    } => {
+                        print!("{}\nghxc> ", "Got some yummy T values from the sender xD".magenta());
+                        if let Some(proto_data) = self.courier_pcheck_table
+                            .get(
+                                &(from_address.clone(), recipient_address.clone()),
+                                &self.sender_pcheck_table.guard()
+                             )
+                        { 
+                            if let Ok(mut pd) = proto_data.lock() {
+                                pd.t_values_from_sender = Some(sender_to_courier_t_values);
+                                // then, check for r values from recipient and generate Ws if we're
+                                // ready
+                            }
+                        }
+                    },
+                    PCheckMessage::SenderToRecipientRound1 {
+                        courier_address,
+                        sender_to_recipient_t_values
+                    } => {
+                        print!("{}\nghxc> ", "Got some yummy T values from the sender xD".magenta());
+                        if let Some(proto_data) = self.recipient_pcheck_table
+                            .get(
+                                &(from_address.clone(), courier_address.clone()),
+                                &self.recipient_pcheck_table.guard()
+                             )
+                        { 
+                            if let Ok(mut pd) = proto_data.lock() {
+                                pd.t_values_from_sender = Some(sender_to_recipient_t_values);
+                                // then, check for t values from recipient and generate Ws if we're
+                                // ready
+                            }
+
+                        }
                     },
                     _ => {
                         print!("No implementation for this message type yet.\nghxc> ");
@@ -511,6 +634,14 @@ impl Client {
             a_values: Some(a_vals),
             b_values: Some(b_vals),
             encrypted_a_b_pairs: Some(pairs),
+            t_values_from_sender: None,
+            courier_w_additive_shares: None,
+            sender_w_additive_shares: None,
+            recipient_w_additive_shares: None,
+            recipient_paillier_key: None,
+            recipient_to_courier_a_shares: None,
+            recipient_to_courier_b_shares: None,
+            recipient_to_courier_encrypted_a_b_pairs,
         }
     }
 
@@ -533,6 +664,7 @@ impl Client {
             a_values: Some(a_vals),
             b_values: Some(b_vals),
             encrypted_a_b_pairs: Some(pairs),
+            t_values_from_sender: None,
         }
     }
 
@@ -565,14 +697,43 @@ impl Client {
                 print!("{}\nghxc> ", "Major problem".red().bold());
                 return;
             }
-            self.sender_generate_RTs(proto_data.clone());
+            self.sender_generate_RTs(courier_address.clone(), recipient_address.clone(), proto_data.clone());
         }
         else {
             print!("{}\nghxc> ", "Major Problem!".red().bold());
         }
     }
 
-    fn sender_generate_RTs(&self, pd: Arc<Mutex<SenderPCheckProtoData>>) {
+    fn courier_process_round1(&self, sender_address: String, recipient_address: String,) {
+        if let Some(proto_data) = self.courier_pcheck_table
+        .get(
+            &(sender_address.clone(), recipient_address.clone()),
+            &self.courier_pcheck_table.guard()
+        ) {
+            if let Ok(pd) = proto_data.lock() {
+                if (
+                    pd.t_values_from_sender.is_some()
+                ) {
+                    print!("{}\nghxc> ", "We have the t-vals from sender".green().bold());
+                }
+                else {
+                    print!("{}\nghxc> ", "We don't have it all yet".yellow());
+                    return;
+                }
+            }
+            else {
+                print!("{}\nghxc> ", "Major problem".red().bold());
+                return;
+            }
+            //do something else here...
+            //self.sender_generate_RTs(courier_address.clone(), recipient_address.clone(), proto_data.clone());
+        }
+        else {
+            print!("{}\nghxc> ", "Major Problem!".red().bold());
+        }
+    }
+
+    fn sender_generate_RTs(&self, courier_address: String, recipient_address: String, pd: Arc<Mutex<SenderPCheckProtoData>>) {
         if let Ok(mut spd) = pd.lock() {
             println!("{}", "Starting homomorphic encryptions...".yellow());
             let courier_key = spd.courier_paillier_key.clone();
@@ -617,26 +778,30 @@ impl Client {
                 }).collect());
 
             let to_courier_r1 = PCheckMessage::SenderToCourierRound1 {
-                    sender_to_courier_t_values: spd.t_values_for_courier.unwrap(),
+                    recipient_address: recipient_address.clone(),
+                    sender_to_courier_t_values: spd.t_values_for_courier.as_ref().unwrap().to_vec(),
             };
 
             let to_recipient_r1 = PCheckMessage::SenderToRecipientRound1 {
-                sender_to_recipient_t_values: spd.t_values_for_recipient.unwrap(),
+                courier_address: courier_address.clone(),
+                sender_to_recipient_t_values: spd.t_values_for_recipient.as_ref().unwrap().to_vec(),
             };
 
-            if !self.direct_message(courier_address, to_courier_r1) {
+            if !self.direct_message(courier_address.clone(), ProtocolMessage::PCheck(to_courier_r1)) {
                 print!("{}\nghxc> ", "not in lookup. weird.".yellow());
             }
-            if !self.direct_message(recipient_address, to_recipient_r1) {
+            if !self.direct_message(recipient_address.clone(), ProtocolMessage::PCheck(to_recipient_r1)) {
                 print!("{}\nghxc> ", "not in lookup. weird.".yellow());
             }
 
             println!("{}", "Done generating R and T values.".green().bold());
             let to_courier_r1 = PCheckMessage::SenderToCourierRound1 {
-                sender_to_courier_t_values : spd.t_values_for_courier.clone().unwrap()
+                sender_to_courier_t_values : spd.t_values_for_courier.clone().unwrap(),
+                recipient_address: recipient_address.clone(),
             };
             let to_recipient_r1 = PCheckMessage::SenderToRecipientRound1 {
-                sender_to_recipient_t_values : spd.t_values_for_recipient.clone().unwrap()
+                sender_to_recipient_t_values : spd.t_values_for_recipient.clone().unwrap(),
+                courier_address: courier_address.clone(),
             };
         }
         else {
