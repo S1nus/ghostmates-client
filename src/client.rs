@@ -33,6 +33,7 @@ use paillier::{
 };
 use rand::{distributions::Uniform, Rng, rngs::ThreadRng};
 
+#[derive(Debug)]
 pub struct SenderPCheckProtoData {
     r_values_from_courier: Option<Vec<u64>>,
     r_values_from_recipient: Option<Vec<u64>>,
@@ -81,12 +82,13 @@ impl SenderPCheckProtoData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct CourierPCheckProtoData {
     a_values: Option<Vec<u64>>,
     b_values: Option<Vec<u64>>,
     encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
     t_values_from_sender: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    r_values_from_recipient: Option<Vec<u64>>,
     courier_w_additive_shares: Option<Vec<u64>>,
     sender_w_additive_shares: Option<Vec<u64>>,
     recipient_w_additive_shares: Option<Vec<u64>>,
@@ -95,6 +97,7 @@ pub struct CourierPCheckProtoData {
     recipient_to_courier_a_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     recipient_to_courier_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     recipient_to_courier_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
+    t_values_for_recipient: Option<Vec<PaillierEncodedCiphertext<u64>>>,
 }
 #[derive(Clone)]
 pub struct RecipientPCheckProtoData {
@@ -539,9 +542,11 @@ impl Client {
                                 pd.recipient_to_courier_b_shares = Some(b_shares);
                                 pd.recipient_to_courier_encrypted_a_b_pairs = Some(enc_ab_pairs);
                             }
+                            else { panic!("Failed to lock proto data"); }
+                            self.courier_generate_RTs(sender_address.clone(), from_address.clone(), proto_data.clone());
+                            self.courier_process_round1(sender_address.clone(), from_address.clone());
 
                         }
-                        self.courier_process_round1(sender_address.clone(), from_address.clone());
                     },
                     PCheckMessage::CourierToSenderRound1 {
                         recipient_address,
@@ -584,6 +589,7 @@ impl Client {
                                 // then, check for r values from recipient and generate Ws if we're
                                 // ready
                             }
+                            self.courier_process_round1(from_address.clone(), recipient_address.clone());
                         }
                     },
                     PCheckMessage::SenderToRecipientRound1 {
@@ -604,6 +610,12 @@ impl Client {
                             }
 
                         }
+                    },
+                    PCheckMessage::CourierToRecipientRound1 {
+                        sender_address,
+                        courier_to_recipient_t_values,
+                    } => {
+                        print!("{}\nghxc> ", "Received T vals from Courier");
                     },
                     _ => {
                         print!("No implementation for this message type yet.\nghxc> ");
@@ -635,13 +647,15 @@ impl Client {
             b_values: Some(b_vals),
             encrypted_a_b_pairs: Some(pairs),
             t_values_from_sender: None,
+            r_values_from_recipient: None,
             courier_w_additive_shares: None,
             sender_w_additive_shares: None,
             recipient_w_additive_shares: None,
             recipient_paillier_key: None,
             recipient_to_courier_a_shares: None,
             recipient_to_courier_b_shares: None,
-            recipient_to_courier_encrypted_a_b_pairs,
+            recipient_to_courier_encrypted_a_b_pairs: None,
+            t_values_for_recipient: None,
         }
     }
 
@@ -705,16 +719,20 @@ impl Client {
     }
 
     fn courier_process_round1(&self, sender_address: String, recipient_address: String,) {
+        println!("s: {} r: {}", sender_address, recipient_address);
         if let Some(proto_data) = self.courier_pcheck_table
         .get(
             &(sender_address.clone(), recipient_address.clone()),
             &self.courier_pcheck_table.guard()
         ) {
-            if let Ok(pd) = proto_data.lock() {
+            let mut generate_ws = false;
+            if let Ok(mut pd) = proto_data.lock() {
                 if (
-                    pd.t_values_from_sender.is_some()
+                    pd.t_values_from_sender.is_some() &&
+                    pd.r_values_from_recipient.is_some()
                 ) {
-                    print!("{}\nghxc> ", "We have the t-vals from sender".green().bold());
+                    print!("{}\nghxc> ", "We have the t-vals from sender and R values from recipient.".green().bold());
+                    generate_ws = true;
                 }
                 else {
                     print!("{}\nghxc> ", "We don't have it all yet".yellow());
@@ -722,15 +740,19 @@ impl Client {
                 }
             }
             else {
-                print!("{}\nghxc> ", "Major problem".red().bold());
+                print!("{}\nghxc> ", "Couldn't lock. Probably should panic here.".red().bold());
                 return;
             }
-            //do something else here...
-            //self.sender_generate_RTs(courier_address.clone(), recipient_address.clone(), proto_data.clone());
+            if generate_ws {
+                self.courier_generate_ws(proto_data.clone());
+            }
         }
         else {
             print!("{}\nghxc> ", "Major Problem!".red().bold());
         }
+    }
+
+    fn courier_generate_ws(&self, pd: Arc<Mutex<CourierPCheckProtoData>>) {
     }
 
     fn sender_generate_RTs(&self, courier_address: String, recipient_address: String, pd: Arc<Mutex<SenderPCheckProtoData>>) {
@@ -809,6 +831,49 @@ impl Client {
             print!("{}", "Major problem.".red().bold());
         }
     }
+
+    fn courier_generate_RTs(&self, sender_address: String, recipient_address: String, pd: Arc<Mutex<CourierPCheckProtoData>>) {
+        print!("{}\nghxc> ", "I'm the courier. Time to generate RTs for recipient.".yellow());
+        if let Ok(mut pd) = pd.lock() {
+            let ab_vals = pd.recipient_to_courier_encrypted_a_b_pairs.clone().unwrap();
+            let key = pd.recipient_paillier_key.clone().unwrap();
+            let courier_a_values = pd.a_values.clone().unwrap();
+            let courier_b_values = pd.b_values.clone().unwrap();
+
+            let mut rng = rand::thread_rng();
+            let range = Uniform::new::<u64, u64>(0, 4987);
+
+            pd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
+
+            pd.t_values_for_recipient = Some(pd.recipient_to_courier_encrypted_a_b_pairs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, cts)| {
+                    let rk = key.clone();
+                    Paillier::add(&rk,
+                        Paillier::add(&rk,
+                            Paillier::mul(&rk, cts.clone().0, courier_a_values[i]),
+                            Paillier::mul(&rk, cts.clone().1, courier_b_values[i]),
+                        ),
+                        pd.r_values_from_recipient.clone().unwrap()[i]
+                    )
+                }).collect());
+
+            let to_recipient_t = PCheckMessage::CourierToRecipientRound1 {
+                sender_address: sender_address,
+                courier_to_recipient_t_values: pd.t_values_for_recipient.clone().unwrap(),
+            };
+            if !self.direct_message(recipient_address.clone(), ProtocolMessage::PCheck(to_recipient_t)) {
+                print!("{}\nghxc> ", "weird that we had to do a lookup.".red());
+            }
+        }
+        else {
+            print!("{}\nghxc>", "Major problem.".red().bold());
+        }
+    }
+
 
 }
 
