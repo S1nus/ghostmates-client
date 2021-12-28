@@ -59,7 +59,7 @@ impl SenderPCheckProtoData {
     pub fn new_with_ab_values() -> SenderPCheckProtoData {
 
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 4987);
+        let range = Uniform::new(0, 50);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -649,7 +649,7 @@ impl Client {
 
     fn generate_courier_pcheck_data(&self) -> CourierPCheckProtoData {
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 4987);
+        let range = Uniform::new(0, 50);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -680,8 +680,7 @@ impl Client {
 
     fn generate_recipient_pcheck_data(&self) -> RecipientPCheckProtoData {
         let mut rng = rand::thread_rng();
-        //4987
-        let range = Uniform::new(0, 4987);
+        let range = Uniform::new(0, 50);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -879,7 +878,7 @@ impl Client {
             let recipient_key = spd.recipient_paillier_key.clone();
 
             let mut rng = rand::thread_rng();
-            let range = Uniform::new::<u64, u64>(0, 4987);
+            let range = Uniform::new::<u64, u64>(0, 50);
 
             spd.r_values_from_courier = Some((0..128).map(|_| rng.sample(&range)).collect());
             spd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
@@ -892,8 +891,8 @@ impl Client {
                     let ck = courier_key.clone().unwrap();
                     Paillier::add(&ck,
                         Paillier::add(&ck,
-                            Paillier::mul(&ck, cts.clone().0, spd.sender_a_values[i]),
-                            Paillier::mul(&ck, cts.clone().1, spd.sender_b_values[i]),
+                            Paillier::mul(&ck, cts.clone().1, spd.sender_a_values[i]),
+                            Paillier::mul(&ck, cts.clone().0, spd.sender_b_values[i]),
                         ),
                         spd.r_values_from_courier.clone().unwrap()[i]
                     )
@@ -908,8 +907,8 @@ impl Client {
                     let rk = recipient_key.clone().unwrap();
                     Paillier::add(&rk,
                         Paillier::add(&rk,
-                            Paillier::mul(&rk, cts.clone().0, spd.sender_a_values[i]),
-                            Paillier::mul(&rk, cts.clone().1, spd.sender_b_values[i]),
+                            Paillier::mul(&rk, cts.clone().1, spd.sender_a_values[i]),
+                            Paillier::mul(&rk, cts.clone().0, spd.sender_b_values[i]),
                         ),
                         spd.r_values_from_recipient.clone().unwrap()[i]
                     )
@@ -957,7 +956,7 @@ impl Client {
             let courier_b_values = pd.b_values.clone().unwrap();
 
             let mut rng = rand::thread_rng();
-            let range = Uniform::new::<u64, u64>(0, 4987);
+            let range = Uniform::new::<u64, u64>(0, 50);
 
             pd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
 
@@ -970,8 +969,8 @@ impl Client {
                     let rk = key.clone();
                     Paillier::add(&rk,
                         Paillier::add(&rk,
-                            Paillier::mul(&rk, cts.clone().0, courier_a_values[i]),
-                            Paillier::mul(&rk, cts.clone().1, courier_b_values[i]),
+                            Paillier::mul(&rk, cts.clone().1, courier_a_values[i]),
+                            Paillier::mul(&rk, cts.clone().0, courier_b_values[i]),
                         ),
                         pd.r_values_from_recipient.clone().unwrap()[i]
                     )
