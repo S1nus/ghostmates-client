@@ -9,6 +9,7 @@ use flurry::HashMap;
 use std::{
     sync::{Arc, Mutex},
     net::SocketAddr,
+    iter::zip,
 };
 
 use async_std::task;
@@ -683,6 +684,7 @@ impl Client {
     }
 
     fn sender_process_round1(&self, courier_address: String, recipient_address: String,) {
+        let mut generate_ws = false;
         if let Some(proto_data) = self.sender_pcheck_table
         .get(
             &(courier_address.clone(), recipient_address.clone()),
@@ -700,6 +702,7 @@ impl Client {
                     pd.courier_to_sender_b_shares.is_some() &&
                     pd.courier_to_sender_encrypted_a_b_pairs.is_some()
                 ) {
+                    generate_ws = true;
                     print!("{}\nghxc> ", "WE ARE REDY FOR ROUND 2".green().bold());
                 }
                 else {
@@ -712,10 +715,33 @@ impl Client {
                 return;
             }
             self.sender_generate_RTs(courier_address.clone(), recipient_address.clone(), proto_data.clone());
+            if generate_ws {
+                self.sender_generate_ws(proto_data.clone());
+            }
         }
         else {
             print!("{}\nghxc> ", "Major Problem!".red().bold());
         }
+    }
+
+    fn sender_generate_ws(&self, pdata: Arc<Mutex<SenderPCheckProtoData>>) {
+        let mut pd = pdata.lock().unwrap();
+        let r_courier = pd.r_values_from_courier.clone();
+        let r_recipient = pd.r_values_from_recipient.clone();
+
+        let my_ab_products : Vec<u64> = zip(pd.sender_a_values.clone(), pd.sender_b_values.clone())
+            .map(|(a, b)| {
+                (a*b)%7757
+            }).collect();
+
+        let ws: Vec<u64> = zip(my_ab_products, zip(pd.r_values_from_courier.clone().unwrap(), pd.r_values_from_recipient.clone().unwrap()))
+            .map(|(ab, (rc, rr))| {
+                println!("({} - {} - {})%7757" , ab, rc, rr);
+                0
+                //(ab - rc - rr)%7757
+            }).collect();
+        //pd.sender_w_additive_shares = ws.clone();
+        //ws.iter().for_each(|w| println!("{}", w));
     }
 
     fn courier_process_round1(&self, sender_address: String, recipient_address: String,) {
