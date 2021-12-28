@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, Mutex},
     net::SocketAddr,
     iter::zip,
+    convert::TryFrom,
 };
 
 use async_std::task;
@@ -42,6 +43,7 @@ pub struct SenderPCheckProtoData {
     t_values_for_recipient: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     sender_a_values: Vec<u64>,
     sender_b_values: Vec<u64>,
+    sender_w_additive_shares: Option<Vec<u64>>,
     recipient_paillier_key: Option<PaillierEncryptionKey>,
     recipient_to_sender_a_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     recipient_to_sender_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
@@ -70,6 +72,7 @@ impl SenderPCheckProtoData {
 
             sender_a_values: a_vals,
             sender_b_values: b_vals,
+            sender_w_additive_shares: None,
             recipient_paillier_key: None,
             recipient_to_sender_a_shares: None,
             recipient_to_sender_b_shares: None,
@@ -107,6 +110,7 @@ pub struct RecipientPCheckProtoData {
     b_values: Option<Vec<u64>>,
     encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
     t_values_from_sender: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+    t_values_from_courier: Option<Vec<PaillierEncodedCiphertext<u64>>>,
 }
 pub struct ACheckProtoData {}
 
@@ -609,6 +613,7 @@ impl Client {
                                 // then, check for t values from recipient and generate Ws if we're
                                 // ready
                             }
+                            self.recipient_process_round1(from_address.clone(), courier_address.clone());
 
                         }
                     },
@@ -617,6 +622,19 @@ impl Client {
                         courier_to_recipient_t_values,
                     } => {
                         print!("{}\nghxc> ", "Received T vals from Courier");
+                        if let Some(proto_data) = self.recipient_pcheck_table
+                            .get(
+                                &(sender_address.clone(), from_address.clone()),
+                                &self.recipient_pcheck_table.guard()
+                             )
+                        { 
+                            if let Ok(mut pd) = proto_data.lock() {
+                                pd.t_values_from_courier = Some(courier_to_recipient_t_values);
+                                // then, check for t values from recipient and generate Ws if we're
+                                // ready
+                            }
+                            self.recipient_process_round1(sender_address.clone(), from_address.clone());
+                        }
                     },
                     _ => {
                         print!("No implementation for this message type yet.\nghxc> ");
@@ -680,6 +698,7 @@ impl Client {
             b_values: Some(b_vals),
             encrypted_a_b_pairs: Some(pairs),
             t_values_from_sender: None,
+            t_values_from_courier: None,
         }
     }
 
@@ -736,12 +755,14 @@ impl Client {
 
         let ws: Vec<u64> = zip(my_ab_products, zip(pd.r_values_from_courier.clone().unwrap(), pd.r_values_from_recipient.clone().unwrap()))
             .map(|(ab, (rc, rr))| {
-                println!("({} - {} - {})%7757" , ab, rc, rr);
-                0
-                //(ab - rc - rr)%7757
+                u64::try_from(((2*7757)+i64::try_from(ab).unwrap() - i64::try_from(rc).unwrap() - i64::try_from(rr).unwrap())%7757).unwrap()
             }).collect();
-        //pd.sender_w_additive_shares = ws.clone();
+        pd.sender_w_additive_shares = Some(ws.clone());
         //ws.iter().for_each(|w| println!("{}", w));
+        zip(pd.sender_a_values.clone(), zip(pd.sender_b_values.clone(), ws))
+        .for_each(|(a, (b, w))| {
+            println!("{} * {} = {}", a, b, w);
+        });
     }
 
     fn courier_process_round1(&self, sender_address: String, recipient_address: String,) {
@@ -778,7 +799,77 @@ impl Client {
         }
     }
 
-    fn courier_generate_ws(&self, pd: Arc<Mutex<CourierPCheckProtoData>>) {
+    fn courier_generate_ws(&self, pdata: Arc<Mutex<CourierPCheckProtoData>>) {
+        let mut pd = pdata.lock().unwrap();
+        let courier_a = pd.a_values.clone().unwrap();
+        let courier_b = pd.b_values.clone().unwrap();
+        let ab_vals: Vec<u64> = zip(courier_a.clone(), courier_b.clone())
+            .map(|(a, b)| {
+                (a*b)%7757
+            }).collect();
+        let ws : Vec<u64> = zip(ab_vals, zip(pd.t_values_from_sender.clone().unwrap(), pd.r_values_from_recipient.clone().unwrap()))
+            .map(|(ab, (ts, rr))| {
+                ((7757*3)+ab - rr + Paillier::decrypt(&self.paillier_privkey, &ts))%7757
+            }).collect();
+        //ws.iter().for_each(|w| println!("{}",w));
+        zip(courier_a.clone(), zip(courier_b.clone(), ws))
+        .for_each(|(a, (b, w))| {
+            println!("{} * {} = {}", a, b, w);
+        });
+    }
+
+    fn recipient_process_round1(&self, sender_address: String, courier_address: String) {
+        let mut generate_ws = false;
+        if let Some(proto_data) = self.recipient_pcheck_table
+        .get(
+            &(sender_address.clone(), courier_address.clone()),
+            &self.recipient_pcheck_table.guard()
+        ) {
+            if let Ok(pd) = proto_data.lock() {
+                if (
+                    pd.t_values_from_sender.is_some() &&
+                    pd.t_values_from_courier.is_some()
+                ) {
+                    generate_ws = true;
+                    print!("{}\nghxc> ", "WE ARE REDY FOR ROUND 2".green().bold());
+                }
+                else {
+                    print!("{}\nghxc> ", "We don't have it all yet".yellow());
+                    return;
+                }
+            }
+            else {
+                print!("{}\nghxc> ", "Major problem".red().bold());
+                return;
+            }
+            if generate_ws {
+                self.recipient_generate_ws(proto_data.clone());
+            }
+        }
+        else {
+            print!("{}\nghxc> ", "Major Problem!".red().bold());
+        }
+
+    }
+
+    fn recipient_generate_ws(&self, pdata: Arc<Mutex<RecipientPCheckProtoData>>) {
+        let mut pd = pdata.lock().unwrap();
+
+        let my_ab_products : Vec<u64> = zip(pd.a_values.clone().unwrap(), pd.b_values.clone().unwrap())
+            .map(|(a, b)| {
+                (a*b)%7757
+            }).collect();
+
+        let ws : Vec<u64> = zip(my_ab_products, zip(pd.t_values_from_sender.clone().unwrap(), pd.t_values_from_courier.clone().unwrap()))
+            .map(|(ab, (ts, tc))| {
+                (ab + Paillier::decrypt(&self.paillier_privkey, &ts) + Paillier::decrypt(&self.paillier_privkey, &tc))%7757
+            }).collect();
+
+        //ws.iter().for_each(|w| {println!("{}", w)});
+        zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), ws))
+        .for_each(|(a, (b, w))| {
+            println!("{} * {} = {}", a, b, w);
+        });
     }
 
     fn sender_generate_RTs(&self, courier_address: String, recipient_address: String, pd: Arc<Mutex<SenderPCheckProtoData>>) {
@@ -792,7 +883,6 @@ impl Client {
 
             spd.r_values_from_courier = Some((0..128).map(|_| rng.sample(&range)).collect());
             spd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
-
             spd.t_values_for_courier = Some(spd.courier_to_sender_encrypted_a_b_pairs
                 .as_ref()
                 .unwrap()
