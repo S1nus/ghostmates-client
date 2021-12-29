@@ -1,3 +1,4 @@
+#![feature(iter_zip)]
 use rand::{distributions::Uniform, Rng, rngs::ThreadRng};
 use paillier::*;
 use paillier::{
@@ -74,26 +75,26 @@ fn main() {
             )
         }).collect();
 
-    let sender_ws = zip(sender_to_recipient_rs.clone(), zip(sender_to_courier_rs.clone(), zip(sender_a_vals.clone(), sender_b_vals.clone())))
+    let sender_ws : Vec<u64> = zip(sender_to_recipient_rs.clone(), zip(sender_to_courier_rs.clone(), zip(sender_a_vals.clone(), sender_b_vals.clone())))
         .map(|(rs, (rc, (a,b)))| {
             u64::try_from(7757*3+(
                 i64::try_from(((a*b)%7757)).unwrap() -
                 i64::try_from(rs).unwrap() -
                 i64::try_from(rc).unwrap()
             )%7757).unwrap()
-        });
+        }).collect();
 
-    let courier_ws = zip(sender_to_courier_ts.clone(), zip(courier_to_recipient_rs.clone(), zip(courier_a_vals.clone(), courier_b_vals.clone())))
+    let courier_ws : Vec<u64> = zip(sender_to_courier_ts.clone(), zip(courier_to_recipient_rs.clone(), zip(courier_a_vals.clone(), courier_b_vals.clone())))
         .map(|(ts, (rw, (a,b)))| {
             u64::try_from((
                 i64::try_from(((a*b)%7757)).unwrap() - i64::try_from(rw).unwrap() + i64::try_from(Paillier::decrypt(&courier_sk, ts)).unwrap()
             )%7757).unwrap()
-        });
+        }).collect();
 
-    let recipient_ws = zip(sender_to_recipient_ts.clone(), zip(courier_to_recipient_ts.clone(), zip(recipient_a_vals.clone(), recipient_b_vals.clone())))
+    let recipient_ws : Vec<u64> = zip(sender_to_recipient_ts.clone(), zip(courier_to_recipient_ts.clone(), zip(recipient_a_vals.clone(), recipient_b_vals.clone())))
         .map(|(ts, (tc, (a, b)))| {
             (((a*b)%7757) + Paillier::decrypt(&recipient_sk, ts) + Paillier::decrypt(&recipient_sk, tc))%7757
-        });
+        }).collect();
 
     let a_sums = zip(sender_a_vals.clone(), zip(courier_a_vals.clone(), recipient_a_vals.clone()))
         .map(|(sa, (ca, ra))| {
@@ -108,9 +109,12 @@ fn main() {
             (sw+cw+rw)%7757
         });
 
-    zip(a_sums, zip(b_sums, w_sums))
+    println!("{} * {} = {}", sender_a_vals[0], sender_b_vals[0], sender_ws[0]);
+    println!("{} * {} = {}", courier_a_vals[0], courier_b_vals[0], courier_ws[0]);
+    println!("{} * {} = {}", recipient_a_vals[0], recipient_b_vals[0], recipient_ws[0]);
+    /*zip(a_sums, zip(b_sums, w_sums))
         .for_each(|(a, (b, w))| {
             println!("{} * {} = {}", a, b, w);
             println!("{}", (a*b)%7757==w);
-        });
+        });*/
 }

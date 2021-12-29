@@ -1,3 +1,4 @@
+#![feature(iter_zip)]
 use futures::stream::{SplitStream, SplitSink};
 use futures::SinkExt;
 
@@ -111,7 +112,7 @@ pub struct CourierPCheckProtoData {
     recipient_to_courier_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
     t_values_for_recipient: Option<Vec<PaillierEncodedCiphertext<u64>>>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RecipientPCheckProtoData {
 
     a_values: Option<Vec<u64>>,
@@ -411,22 +412,36 @@ impl Client {
                         if recipient_ghost_address == self.ghost_address {
                             print!("I'm recipient.\nghxc> ");
                             println!("generating pcheck round1 data...");
-                            let recipient_pcheck_data = Arc::new(Mutex::new(self.generate_recipient_pcheck_data()));
-                            println!("finished generating.");
-                            self.recipient_pcheck_table.insert(
-                                (from_address.clone(), recipient_ghost_address.clone()),
-                                recipient_pcheck_data.clone(),
-                                &self.recipient_pcheck_table.guard()
-                            );
+
+                            let mut pd = match self.recipient_pcheck_table
+                            .get(
+                                    &(from_address.clone(), courier_ghost_address.clone()),
+                                    &self.recipient_pcheck_table.guard()
+                             ) {
+                                Some(proto_data) => {
+                                    proto_data.clone()
+                                },
+                                None => {
+                                    print!("{}\nghxc> ", "We don't have it, but I'll create it.".yellow());
+                                    let recipient_pcheck_data = Arc::new(Mutex::new(self.generate_recipient_pcheck_data()));
+                                    self.recipient_pcheck_table.insert(
+                                        (from_address.clone(), courier_ghost_address.clone()),
+                                        recipient_pcheck_data.clone(),
+                                        &self.recipient_pcheck_table.guard()
+                                    );
+                                    println!("The loopup is {} , {}", &from_address, &courier_ghost_address);
+                                    recipient_pcheck_data
+                                }
+                            };
+
+                            println!("The loopup is {} , {}", &from_address, &courier_ghost_address);
                             if !self.direct_message(
                                 from_address.clone(),
                                 ProtocolMessage::PCheck(
                                     PCheckMessage::RecipientToSenderRound1 {
                                         courier_address: courier_ghost_address,
                                         paillier_key: self.paillier_pubkey.clone(),
-                                        enc_ab_pairs: recipient_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
-                                        a_vals: recipient_pcheck_data.lock().unwrap().a_values.clone().unwrap(),
-                                        b_vals: recipient_pcheck_data.lock().unwrap().b_values.clone().unwrap(),
+                                        enc_ab_pairs: pd.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
                                         a_shares: vec![],
                                         b_shares: vec![],
                                     }
@@ -454,8 +469,6 @@ impl Client {
                                         enc_ab_pairs: courier_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
                                         a_shares: vec![],
                                         b_shares: vec![],
-                                        a_vals: courier_pcheck_data.lock().unwrap().a_values.clone().unwrap(),
-                                        b_vals: courier_pcheck_data.lock().unwrap().b_values.clone().unwrap(),
                                     }
                                 ),
                             ) {
@@ -478,10 +491,16 @@ impl Client {
                         sender_ghost_address
                     } => {
                         print!("{}{}\nghxc> ", "A courier wants me to receive a package from".yellow(), sender_ghost_address.blue());
+                        println!("{:?}", self.recipient_pcheck_table
+                        .get(
+                                &(sender_ghost_address.clone(), from_address.clone()),
+                                &self.recipient_pcheck_table.guard()
+                         ));
+
                         let mut pd = match self.recipient_pcheck_table
                         .get(
                                 &(sender_ghost_address.clone(), from_address.clone()),
-                                &self.sender_pcheck_table.guard()
+                                &self.recipient_pcheck_table.guard()
                          ) {
                             Some(proto_data) => {
                                 proto_data.clone()
@@ -494,6 +513,7 @@ impl Client {
                                     recipient_pcheck_data.clone(),
                                     &self.recipient_pcheck_table.guard()
                                 );
+                                println!("The loopup is {} , {}", &sender_ghost_address, &from_address);
                                 recipient_pcheck_data
                             }
                         };
@@ -520,8 +540,6 @@ impl Client {
                         enc_ab_pairs,
                         a_shares,
                         b_shares,
-                        a_vals,
-                        b_vals,
                     } => {
                         println!("received a round1 from a recipient courier: {}", courier_address); 
                         if let Some(proto_data) = self.sender_pcheck_table
@@ -535,8 +553,6 @@ impl Client {
                                 pd.recipient_to_sender_a_shares = Some(a_shares);
                                 pd.recipient_to_sender_b_shares = Some(b_shares);
                                 pd.recipient_to_sender_encrypted_a_b_pairs = Some(enc_ab_pairs);
-                                pd.debug_recipient_a_vals = Some(a_vals);
-                                pd.debug_recipient_b_vals = Some(b_vals);
                             }
 
                         }
@@ -575,8 +591,6 @@ impl Client {
                         enc_ab_pairs,
                         a_shares,
                         b_shares,
-                        a_vals,
-                        b_vals,
                     } => {
                         println!("received a round1 from a courier"); 
                         println!("received a round1 from a courier recipient: {}", recipient_address); 
@@ -591,8 +605,6 @@ impl Client {
                                 pd.courier_to_sender_a_shares = Some(a_shares);
                                 pd.courier_to_sender_b_shares = Some(b_shares);
                                 pd.courier_to_sender_encrypted_a_b_pairs = Some(enc_ab_pairs);
-                                pd.debug_courier_a_vals = Some(a_vals);
-                                pd.debug_courier_b_vals = Some(b_vals);
                             }
 
                         }
@@ -673,14 +685,10 @@ impl Client {
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
-        let pairs: Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)> =  
-            a_vals.iter().zip(b_vals.iter()).map(|(a, b)| 
-        {
-            (
-                Paillier::encrypt(&self.paillier_privkey, *a),
-                Paillier::encrypt(&self.paillier_privkey, *b)
-            )
-        }).collect();
+        let pairs: Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)> =  zip(&a_vals, &b_vals)
+        .map(|(a, b)| {
+            (Paillier::encrypt(&self.paillier_pubkey, *a), Paillier::encrypt(&self.paillier_pubkey, *b))
+        }).collect(); 
         CourierPCheckProtoData {
             a_values: Some(a_vals),
             b_values: Some(b_vals),
@@ -699,19 +707,17 @@ impl Client {
     }
 
     fn generate_recipient_pcheck_data(&self) -> RecipientPCheckProtoData {
+        println!("THIS SHOULD RUN ONCE");
         let mut rng = rand::thread_rng();
         let range = Uniform::new(0, 50);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
-        let pairs: Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)> =  
-            a_vals.iter().zip(b_vals.iter()).map(|(a, b)| 
-        {
-            (
-                Paillier::encrypt(&self.paillier_privkey, *a),
-                Paillier::encrypt(&self.paillier_privkey, *b)
-            )
+        let pairs: Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)> = zip(&a_vals, &b_vals)
+        .map(|(a, b)| {
+            (Paillier::encrypt(&self.paillier_pubkey, *a), Paillier::encrypt(&self.paillier_pubkey, *b))
         }).collect();
+
         RecipientPCheckProtoData {
             a_values: Some(a_vals),
             b_values: Some(b_vals),
@@ -764,20 +770,18 @@ impl Client {
 
     fn sender_generate_ws(&self, pdata: Arc<Mutex<SenderPCheckProtoData>>) {
         let mut pd = pdata.lock().unwrap();
-        let r_courier = pd.r_values_from_courier.clone();
-        let r_recipient = pd.r_values_from_recipient.clone();
+        let r_courier = pd.r_values_from_courier.clone().unwrap();
+        let r_recipient = pd.r_values_from_recipient.clone().unwrap();
 
-        let my_ab_products : Vec<u64> = zip(pd.sender_a_values.clone(), pd.sender_b_values.clone())
-            .map(|(a, b)| {
-                (a*b)%7757
+        let ws : Vec<u64> = zip(r_recipient.clone(), zip(r_courier.clone(), zip(pd.sender_a_values.clone(), pd.sender_b_values.clone())))
+            .map(|(rr, (rc, (a, b)))| {
+                u64::try_from(7757*3+(
+                    i64::try_from(((a*b)%7757)).unwrap() -
+                    i64::try_from(rr).unwrap() -
+                    i64::try_from(rc).unwrap()
+                )%7757).unwrap()%7757
             }).collect();
 
-        let ws: Vec<u64> = zip(my_ab_products, zip(pd.r_values_from_courier.clone().unwrap(), pd.r_values_from_recipient.clone().unwrap()))
-            .map(|(ab, (rc, rr))| {
-                u64::try_from(((2*7757)+i64::try_from(ab).unwrap() - i64::try_from(rc).unwrap() - i64::try_from(rr).unwrap())%7757).unwrap()
-            }).collect();
-        pd.sender_w_additive_shares = Some(ws.clone());
-        //ws.iter().for_each(|w| println!("{}", w));
         zip(pd.sender_a_values.clone(), zip(pd.sender_b_values.clone(), ws))
         .for_each(|(a, (b, w))| {
             println!("{} * {} = {}", a, b, w);
@@ -820,21 +824,16 @@ impl Client {
 
     fn courier_generate_ws(&self, pdata: Arc<Mutex<CourierPCheckProtoData>>) {
         let mut pd = pdata.lock().unwrap();
-        let courier_a = pd.a_values.clone().unwrap();
-        let courier_b = pd.b_values.clone().unwrap();
-        let ab_vals: Vec<u64> = zip(courier_a.clone(), courier_b.clone())
-            .map(|(a, b)| {
-                (a*b)%7757
+        let ws : Vec<u64> = zip(pd.t_values_from_sender.clone().unwrap(), zip(pd.r_values_from_recipient.clone().unwrap(), zip(pd.a_values.clone().unwrap(), pd.b_values.clone().unwrap())))
+            .map(|(t, (r, (a, b)))| {
+                u64::try_from((
+                    i64::try_from(((a*b)%7757)).unwrap() - i64::try_from(r).unwrap() + i64::try_from(Paillier::decrypt(&self.paillier_privkey, t)).unwrap()
+                )%7757).unwrap()
             }).collect();
-        let ws : Vec<u64> = zip(ab_vals, zip(pd.t_values_from_sender.clone().unwrap(), pd.r_values_from_recipient.clone().unwrap()))
-            .map(|(ab, (ts, rr))| {
-                ((7757*3)+ab - rr + Paillier::decrypt(&self.paillier_privkey, &ts))%7757
-            }).collect();
-        //ws.iter().for_each(|w| println!("{}",w));
-        zip(courier_a.clone(), zip(courier_b.clone(), ws))
-        .for_each(|(a, (b, w))| {
-            println!("{} * {} = {}", a, b, w);
-        });
+        zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), ws))
+            .for_each(|(a, (b, w))| {
+                println!("{} * {} = {}", a, b, w);
+            });
     }
 
     fn recipient_process_round1(&self, sender_address: String, courier_address: String) {
@@ -894,43 +893,34 @@ impl Client {
     fn sender_generate_RTs(&self, courier_address: String, recipient_address: String, pd: Arc<Mutex<SenderPCheckProtoData>>) {
         if let Ok(mut spd) = pd.lock() {
             println!("{}", "Starting homomorphic encryptions...".yellow());
-            let courier_key = spd.courier_paillier_key.clone();
-            let recipient_key = spd.recipient_paillier_key.clone();
+            let courier_key = spd.courier_paillier_key.clone().unwrap();
+            let recipient_key = spd.recipient_paillier_key.clone().unwrap();
 
             let mut rng = rand::thread_rng();
             let range = Uniform::new::<u64, u64>(0, 50);
 
             spd.r_values_from_courier = Some((0..128).map(|_| rng.sample(&range)).collect());
             spd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
-            spd.t_values_for_courier = Some(spd.courier_to_sender_encrypted_a_b_pairs
-                .as_ref()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(i, cts)| {
-                    let ck = courier_key.clone().unwrap();
-                    Paillier::add(&ck,
-                        Paillier::add(&ck,
-                            Paillier::mul(&ck, cts.clone().1, spd.sender_a_values[i]),
-                            Paillier::mul(&ck, cts.clone().0, spd.sender_b_values[i]),
+
+            spd.t_values_for_courier = Some(zip(spd.sender_a_values.clone(), zip(spd.sender_b_values.clone(), zip(spd.r_values_from_courier.clone().unwrap(), spd.courier_to_sender_encrypted_a_b_pairs.clone().unwrap())))
+                .map(|(a, (b, (r, (ea, eb))))| {
+                    Paillier::add(&courier_key,
+                        Paillier::add(&courier_key,
+                            Paillier::mul(&courier_key, ea, b),
+                            Paillier::mul(&courier_key, a, eb)
                         ),
-                        spd.r_values_from_courier.clone().unwrap()[i]
+                        r
                     )
                 }).collect());
 
-            spd.t_values_for_recipient = Some(spd.recipient_to_sender_encrypted_a_b_pairs
-                .as_ref()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(i, cts)| {
-                    let rk = recipient_key.clone().unwrap();
-                    Paillier::add(&rk,
-                        Paillier::add(&rk,
-                            Paillier::mul(&rk, cts.clone().1, spd.sender_a_values[i]),
-                            Paillier::mul(&rk, cts.clone().0, spd.sender_b_values[i]),
+            spd.t_values_for_recipient = Some(zip(spd.sender_a_values.clone(), zip(spd.sender_b_values.clone(), zip(spd.r_values_from_recipient.clone().unwrap(), spd.recipient_to_sender_encrypted_a_b_pairs.clone().unwrap())))
+                .map(|(a, (b, (r, (ea, eb))))| {
+                    Paillier::add(&recipient_key,
+                        Paillier::add(&recipient_key,
+                            Paillier::mul(&recipient_key, ea, b),
+                            Paillier::mul(&recipient_key, a, eb)
                         ),
-                        spd.r_values_from_recipient.clone().unwrap()[i]
+                        r
                     )
                 }).collect());
 
@@ -952,14 +942,6 @@ impl Client {
             }
 
             println!("{}", "Done generating R and T values.".green().bold());
-            let to_courier_r1 = PCheckMessage::SenderToCourierRound1 {
-                sender_to_courier_t_values : spd.t_values_for_courier.clone().unwrap(),
-                recipient_address: recipient_address.clone(),
-            };
-            let to_recipient_r1 = PCheckMessage::SenderToRecipientRound1 {
-                sender_to_recipient_t_values : spd.t_values_for_recipient.clone().unwrap(),
-                courier_address: courier_address.clone(),
-            };
         }
         else {
             println!("NOT OK");
@@ -980,21 +962,17 @@ impl Client {
 
             pd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
 
-            pd.t_values_for_recipient = Some(pd.recipient_to_courier_encrypted_a_b_pairs
-                .as_ref()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(i, cts)| {
-                    let rk = key.clone();
-                    Paillier::add(&rk,
-                        Paillier::add(&rk,
-                            Paillier::mul(&rk, cts.clone().1, courier_a_values[i]),
-                            Paillier::mul(&rk, cts.clone().0, courier_b_values[i]),
+            pd.t_values_for_recipient = Some(zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), zip(pd.r_values_from_recipient.clone().unwrap(), pd.recipient_to_courier_encrypted_a_b_pairs.clone().unwrap())))
+                .map(|(a, (b, (r, (ea, eb))))| {
+                    Paillier::add(&key,
+                        Paillier::add(&key,
+                            Paillier::mul(&key, ea, b),
+                            Paillier::mul(&key, a, eb),
                         ),
-                        pd.r_values_from_recipient.clone().unwrap()[i]
+                        r
                     )
-                }).collect());
+                }).collect()
+            );
 
             let to_recipient_t = PCheckMessage::CourierToRecipientRound1 {
                 sender_address: sender_address,

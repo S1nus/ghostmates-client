@@ -1,3 +1,4 @@
+#![feature(iter_zip)]
 use std::{
     sync::{Arc, Mutex},
     net::SocketAddr,
