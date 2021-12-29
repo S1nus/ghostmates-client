@@ -53,6 +53,10 @@ pub struct SenderPCheckProtoData {
     courier_to_sender_a_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     courier_to_sender_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     courier_to_sender_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
+    debug_recipient_a_vals: Option<Vec<u64>>,
+    debug_recipient_b_vals: Option<Vec<u64>>,
+    debug_courier_a_vals: Option<Vec<u64>>,
+    debug_courier_b_vals: Option<Vec<u64>>,
 }
 
 impl SenderPCheckProtoData {
@@ -82,6 +86,10 @@ impl SenderPCheckProtoData {
             courier_to_sender_a_shares: None,
             courier_to_sender_b_shares: None,
             courier_to_sender_encrypted_a_b_pairs: None,
+            debug_recipient_a_vals: None,
+            debug_recipient_b_vals: None,
+            debug_courier_a_vals: None,
+            debug_courier_b_vals: None,
         }
     }
 }
@@ -417,6 +425,8 @@ impl Client {
                                         courier_address: courier_ghost_address,
                                         paillier_key: self.paillier_pubkey.clone(),
                                         enc_ab_pairs: recipient_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
+                                        a_vals: recipient_pcheck_data.lock().unwrap().a_values.clone().unwrap(),
+                                        b_vals: recipient_pcheck_data.lock().unwrap().b_values.clone().unwrap(),
                                         a_shares: vec![],
                                         b_shares: vec![],
                                     }
@@ -444,6 +454,8 @@ impl Client {
                                         enc_ab_pairs: courier_pcheck_data.lock().unwrap().encrypted_a_b_pairs.clone().unwrap(),
                                         a_shares: vec![],
                                         b_shares: vec![],
+                                        a_vals: courier_pcheck_data.lock().unwrap().a_values.clone().unwrap(),
+                                        b_vals: courier_pcheck_data.lock().unwrap().b_values.clone().unwrap(),
                                     }
                                 ),
                             ) {
@@ -508,6 +520,8 @@ impl Client {
                         enc_ab_pairs,
                         a_shares,
                         b_shares,
+                        a_vals,
+                        b_vals,
                     } => {
                         println!("received a round1 from a recipient courier: {}", courier_address); 
                         if let Some(proto_data) = self.sender_pcheck_table
@@ -521,6 +535,8 @@ impl Client {
                                 pd.recipient_to_sender_a_shares = Some(a_shares);
                                 pd.recipient_to_sender_b_shares = Some(b_shares);
                                 pd.recipient_to_sender_encrypted_a_b_pairs = Some(enc_ab_pairs);
+                                pd.debug_recipient_a_vals = Some(a_vals);
+                                pd.debug_recipient_b_vals = Some(b_vals);
                             }
 
                         }
@@ -559,6 +575,8 @@ impl Client {
                         enc_ab_pairs,
                         a_shares,
                         b_shares,
+                        a_vals,
+                        b_vals,
                     } => {
                         println!("received a round1 from a courier"); 
                         println!("received a round1 from a courier recipient: {}", recipient_address); 
@@ -573,6 +591,8 @@ impl Client {
                                 pd.courier_to_sender_a_shares = Some(a_shares);
                                 pd.courier_to_sender_b_shares = Some(b_shares);
                                 pd.courier_to_sender_encrypted_a_b_pairs = Some(enc_ab_pairs);
+                                pd.debug_courier_a_vals = Some(a_vals);
+                                pd.debug_courier_b_vals = Some(b_vals);
                             }
 
                         }
