@@ -56,15 +56,17 @@ pub struct SenderPCheckProtoData {
     courier_to_sender_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
     debug_recipient_a_vals: Option<Vec<u64>>,
     debug_recipient_b_vals: Option<Vec<u64>>,
+    debug_recipient_w_vals: Option<Vec<u64>>,
     debug_courier_a_vals: Option<Vec<u64>>,
     debug_courier_b_vals: Option<Vec<u64>>,
+    debug_courier_w_vals: Option<Vec<u64>>,
 }
 
 impl SenderPCheckProtoData {
     pub fn new_with_ab_values() -> SenderPCheckProtoData {
 
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 50);
+        let range = Uniform::new(0, 7757);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -89,8 +91,10 @@ impl SenderPCheckProtoData {
             courier_to_sender_encrypted_a_b_pairs: None,
             debug_recipient_a_vals: None,
             debug_recipient_b_vals: None,
+            debug_recipient_w_vals: None,
             debug_courier_a_vals: None,
             debug_courier_b_vals: None,
+            debug_courier_w_vals: None,
         }
     }
 }
@@ -111,6 +115,13 @@ pub struct CourierPCheckProtoData {
     recipient_to_courier_b_shares: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     recipient_to_courier_encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
     t_values_for_recipient: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+
+    debug_sender_a_vals: Option<Vec<u64>>,
+    debug_sender_b_vals: Option<Vec<u64>>,
+    debug_sender_w_vals: Option<Vec<u64>>,
+    debug_recipient_a_vals: Option<Vec<u64>>,
+    debug_recipient_b_vals: Option<Vec<u64>>,
+    debug_recipient_w_vals: Option<Vec<u64>>,
 }
 #[derive(Clone, Debug)]
 pub struct RecipientPCheckProtoData {
@@ -120,6 +131,13 @@ pub struct RecipientPCheckProtoData {
     encrypted_a_b_pairs: Option<Vec<(PaillierEncodedCiphertext<u64>, PaillierEncodedCiphertext<u64>)>>,
     t_values_from_sender: Option<Vec<PaillierEncodedCiphertext<u64>>>,
     t_values_from_courier: Option<Vec<PaillierEncodedCiphertext<u64>>>,
+
+    debug_sender_a_vals: Option<Vec<u64>>,
+    debug_sender_b_vals: Option<Vec<u64>>,
+    debug_sender_w_vals: Option<Vec<u64>>,
+    debug_courier_a_vals: Option<Vec<u64>>,
+    debug_courier_b_vals: Option<Vec<u64>>,
+    debug_courier_w_vals: Option<Vec<u64>>,
 }
 pub struct ACheckProtoData {}
 
@@ -668,6 +686,21 @@ impl Client {
                             self.recipient_process_round1(sender_address.clone(), from_address.clone());
                         }
                     },
+                    PCheckMessage::SenderABWReveal {
+                        a_vals, b_vals, w_vals
+                    } => {
+                        println!("got a reveal message.");
+                    },
+                    PCheckMessage::CourierABWReveal {
+                        a_vals, b_vals, w_vals
+                    } => {
+                        println!("got a reveal message.");
+                    },
+                    PCheckMessage::RecipientABWReveal {
+                        a_vals, b_vals, w_vals
+                    } => {
+                        println!("got a reveal message.");
+                    },
                     _ => {
                         print!("No implementation for this message type yet.\nghxc> ");
                     }
@@ -681,7 +714,7 @@ impl Client {
 
     fn generate_courier_pcheck_data(&self) -> CourierPCheckProtoData {
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 50);
+        let range = Uniform::new(0, 7757);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -703,13 +736,19 @@ impl Client {
             recipient_to_courier_b_shares: None,
             recipient_to_courier_encrypted_a_b_pairs: None,
             t_values_for_recipient: None,
+            debug_sender_a_vals: None,
+            debug_sender_b_vals: None,
+            debug_sender_w_vals: None,
+            debug_recipient_a_vals: None,
+            debug_recipient_b_vals: None,
+            debug_recipient_w_vals: None,
         }
     }
 
     fn generate_recipient_pcheck_data(&self) -> RecipientPCheckProtoData {
         println!("THIS SHOULD RUN ONCE");
         let mut rng = rand::thread_rng();
-        let range = Uniform::new(0, 50);
+        let range = Uniform::new(0, 7757);
 
         let a_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
         let b_vals: Vec<u64> = (0..128).map(|_| rng.sample(&range)).collect();
@@ -724,6 +763,12 @@ impl Client {
             encrypted_a_b_pairs: Some(pairs),
             t_values_from_sender: None,
             t_values_from_courier: None,
+            debug_sender_a_vals: None,
+            debug_sender_b_vals: None,
+            debug_sender_w_vals: None,
+            debug_courier_a_vals: None,
+            debug_courier_b_vals: None,
+            debug_courier_w_vals: None,
         }
     }
 
@@ -760,7 +805,7 @@ impl Client {
             }
             self.sender_generate_RTs(courier_address.clone(), recipient_address.clone(), proto_data.clone());
             if generate_ws {
-                self.sender_generate_ws(proto_data.clone());
+                self.sender_generate_ws(proto_data.clone(), courier_address.clone(), recipient_address.clone());
             }
         }
         else {
@@ -768,7 +813,7 @@ impl Client {
         }
     }
 
-    fn sender_generate_ws(&self, pdata: Arc<Mutex<SenderPCheckProtoData>>) {
+    fn sender_generate_ws(&self, pdata: Arc<Mutex<SenderPCheckProtoData>>, courier_address: String, recipient_address: String,) {
         let mut pd = pdata.lock().unwrap();
         let r_courier = pd.r_values_from_courier.clone().unwrap();
         let r_recipient = pd.r_values_from_recipient.clone().unwrap();
@@ -782,10 +827,21 @@ impl Client {
                 )%7757).unwrap()%7757
             }).collect();
 
-        zip(pd.sender_a_values.clone(), zip(pd.sender_b_values.clone(), ws))
+        zip(pd.sender_a_values.clone(), zip(pd.sender_b_values.clone(), ws.clone()))
         .for_each(|(a, (b, w))| {
-            println!("{} * {} = {}", a, b, w);
+            println!("{},{},{}", a, b, w);
         });
+        let reveal_message = PCheckMessage::SenderABWReveal {
+            a_vals: pd.sender_a_values.clone(),
+            b_vals: pd.sender_b_values.clone(),
+            w_vals: ws.clone(),
+        };
+        if !self.direct_message(courier_address, ProtocolMessage::PCheck(reveal_message.clone())) {
+            println!("had to lookup. weird.");
+        }
+        if !self.direct_message(recipient_address, ProtocolMessage::PCheck(reveal_message.clone())) {
+            println!("had to lookup. weird.");
+        }
     }
 
     fn courier_process_round1(&self, sender_address: String, recipient_address: String,) {
@@ -814,7 +870,7 @@ impl Client {
                 return;
             }
             if generate_ws {
-                self.courier_generate_ws(proto_data.clone());
+                self.courier_generate_ws(proto_data.clone(), sender_address.clone(), recipient_address.clone());
             }
         }
         else {
@@ -822,7 +878,7 @@ impl Client {
         }
     }
 
-    fn courier_generate_ws(&self, pdata: Arc<Mutex<CourierPCheckProtoData>>) {
+    fn courier_generate_ws(&self, pdata: Arc<Mutex<CourierPCheckProtoData>>, sender_address: String, recipient_address: String) {
         let mut pd = pdata.lock().unwrap();
         let ws : Vec<u64> = zip(pd.t_values_from_sender.clone().unwrap(), zip(pd.r_values_from_recipient.clone().unwrap(), zip(pd.a_values.clone().unwrap(), pd.b_values.clone().unwrap())))
             .map(|(t, (r, (a, b)))| {
@@ -830,10 +886,21 @@ impl Client {
                     i64::try_from(((a*b)%7757)).unwrap() - i64::try_from(r).unwrap() + i64::try_from(Paillier::decrypt(&self.paillier_privkey, t)).unwrap()
                 )%7757).unwrap()
             }).collect();
-        zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), ws))
+        zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), ws.clone()))
             .for_each(|(a, (b, w))| {
-                println!("{} * {} = {}", a, b, w);
+                println!("{},{},{}", a, b, w);
             });
+        let reveal_message = PCheckMessage::CourierABWReveal {
+            a_vals: pd.a_values.clone().unwrap(),
+            b_vals: pd.b_values.clone().unwrap(),
+            w_vals: ws.clone(),
+        };
+        if !self.direct_message(recipient_address.clone(), ProtocolMessage::PCheck(reveal_message.clone())) {
+            println!("weird.");
+        }
+        if !self.direct_message(sender_address.clone(), ProtocolMessage::PCheck(reveal_message.clone())) {
+            println!("weird.");
+        }
     }
 
     fn recipient_process_round1(&self, sender_address: String, courier_address: String) {
@@ -861,7 +928,7 @@ impl Client {
                 return;
             }
             if generate_ws {
-                self.recipient_generate_ws(proto_data.clone());
+                self.recipient_generate_ws(proto_data.clone(), sender_address.clone(), courier_address.clone());
             }
         }
         else {
@@ -870,7 +937,7 @@ impl Client {
 
     }
 
-    fn recipient_generate_ws(&self, pdata: Arc<Mutex<RecipientPCheckProtoData>>) {
+    fn recipient_generate_ws(&self, pdata: Arc<Mutex<RecipientPCheckProtoData>>, sender_address: String, courier_address: String) {
         let mut pd = pdata.lock().unwrap();
 
         let my_ab_products : Vec<u64> = zip(pd.a_values.clone().unwrap(), pd.b_values.clone().unwrap())
@@ -884,10 +951,21 @@ impl Client {
             }).collect();
 
         //ws.iter().for_each(|w| {println!("{}", w)});
-        zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), ws))
+        zip(pd.a_values.clone().unwrap(), zip(pd.b_values.clone().unwrap(), ws.clone()))
         .for_each(|(a, (b, w))| {
-            println!("{} * {} = {}", a, b, w);
+            println!("{},{},{}", a, b, w);
         });
+        let reveal_message = PCheckMessage::RecipientABWReveal {
+            a_vals: pd.a_values.clone().unwrap(),
+            b_vals: pd.b_values.clone().unwrap(),
+            w_vals: ws.clone(),
+        };
+        if !self.direct_message(sender_address.clone(), ProtocolMessage::PCheck(reveal_message.clone())) {
+            println!("weird.");
+        }
+        if !self.direct_message(courier_address.clone(), ProtocolMessage::PCheck(reveal_message.clone())) {
+            println!("weird.");
+        }
     }
 
     fn sender_generate_RTs(&self, courier_address: String, recipient_address: String, pd: Arc<Mutex<SenderPCheckProtoData>>) {
@@ -897,7 +975,7 @@ impl Client {
             let recipient_key = spd.recipient_paillier_key.clone().unwrap();
 
             let mut rng = rand::thread_rng();
-            let range = Uniform::new::<u64, u64>(0, 50);
+            let range = Uniform::new::<u64, u64>(0, 7757);
 
             spd.r_values_from_courier = Some((0..128).map(|_| rng.sample(&range)).collect());
             spd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
@@ -958,7 +1036,7 @@ impl Client {
             let courier_b_values = pd.b_values.clone().unwrap();
 
             let mut rng = rand::thread_rng();
-            let range = Uniform::new::<u64, u64>(0, 50);
+            let range = Uniform::new::<u64, u64>(0, 7757);
 
             pd.r_values_from_recipient = Some((0..128).map(|_| rng.sample(&range)).collect());
 
